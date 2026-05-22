@@ -1,0 +1,25 @@
+{
+  "ignorePackages": [
+    "lodash",
+    "debug"
+  ],
+  "ignoreRules": [
+    "R010"
+  ],
+  "thresholds": {
+    "reputation": 40,
+    "severity": "medium"
+  },
+  "sandbox": {
+    "enabled": true,
+    "timeout": 30
+  },
+  "output": {
+    "json": false,
+    "html": false
+  },
+  "logging": {
+    "verbose": false,
+    "quiet": false
+  }
+}
