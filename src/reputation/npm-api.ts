@@ -70,78 +70,101 @@ export interface DownloadStats {
   end: string;
 }
 
-/**
- * Fetch package metadata from npm registry
- */
+interface NpmPackument {
+  name: string;
+  'dist-tags'?: Record<string, string>;
+  maintainers?: MaintainerInfo[];
+  time?: TimeInfo;
+  versions?: Record<string, Partial<PackageMetadata>>;
+}
+
+export function normalizePackument(data: NpmPackument): PackageMetadata {
+  const latest =
+    data['dist-tags']?.latest ||
+    Object.keys(data.versions || {})
+      .filter((v) => v !== 'created' && v !== 'modified')
+      .sort()
+      .pop();
+
+  const versionData = latest && data.versions ? data.versions[latest] : undefined;
+
+  return {
+    name: data.name,
+    version: latest || 'unknown',
+    description: versionData?.description,
+    license: typeof versionData?.license === 'string' ? versionData.license : undefined,
+    author: versionData?.author as MaintainerInfo | undefined,
+    maintainers: data.maintainers || versionData?.maintainers || [],
+    contributors: versionData?.contributors,
+    repository: versionData?.repository as RepositoryInfo | undefined,
+    bugs: versionData?.bugs as BugsInfo | undefined,
+    homepage: versionData?.homepage,
+    keywords: versionData?.keywords,
+    dependencies: versionData?.dependencies,
+    devDependencies: versionData?.devDependencies,
+    peerDependencies: versionData?.peerDependencies,
+    optionalDependencies: versionData?.optionalDependencies,
+    engines: versionData?.engines,
+    scripts: versionData?.scripts,
+    funding: versionData?.funding as FundingInfo | FundingInfo[] | undefined,
+    time: data.time || { created: '', modified: '' },
+    dist: (versionData?.dist as DistInfo) || { tarball: '', shasum: '' },
+  };
+}
+
 export async function fetchPackageMetadata(pkgName: string): Promise<PackageMetadata> {
   const url = `https://registry.npmjs.org/${encodeURIComponent(pkgName)}`;
-  
+
   const response = await fetch(url, {
     headers: {
-      'Accept': 'application/json',
+      Accept: 'application/json',
     },
   });
-  
+
   if (!response.ok) {
     if (response.status === 404) {
       throw new Error(`Package "${pkgName}" not found in npm registry`);
     }
     throw new Error(`Failed to fetch metadata for "${pkgName}": ${response.statusText}`);
   }
-  
-  const data = await response.json();
-  return data as PackageMetadata;
+
+  const data = (await response.json()) as NpmPackument;
+  return normalizePackument(data);
 }
 
-/**
- * Fetch weekly download count for a package
- */
 export async function fetchDownloadCount(pkgName: string): Promise<number> {
   const url = `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(pkgName)}`;
-  
+
   const response = await fetch(url, {
     headers: {
-      'Accept': 'application/json',
+      Accept: 'application/json',
     },
   });
-  
+
   if (!response.ok) {
-    // Return 0 if package has no downloads or API error
     return 0;
   }
-  
-  const data = await response.json();
+
+  const data = (await response.json()) as { downloads?: number };
   return data.downloads || 0;
 }
 
-/**
- * Fetch all versions of a package
- */
 export async function fetchPackageVersions(pkgName: string): Promise<string[]> {
   const metadata = await fetchPackageMetadata(pkgName);
-  return Object.keys(metadata.time).filter(version => version !== 'created' && version !== 'modified');
+  return Object.keys(metadata.time).filter((version) => version !== 'created' && version !== 'modified');
 }
 
-/**
- * Get the latest version tag info
- */
 export async function getLatestVersion(pkgName: string): Promise<string> {
   const metadata = await fetchPackageMetadata(pkgName);
-  return metadata['dist-tags']?.latest || Object.keys(metadata.time).pop() || 'unknown';
+  return metadata.version;
 }
 
-/**
- * Fetch package history (time-based events)
- */
 export async function fetchPackageHistory(pkgName: string): Promise<TimeInfo> {
   const metadata = await fetchPackageMetadata(pkgName);
   return metadata.time;
 }
 
-/**
- * Check if package has been published recently
- */
-export async function isRecentlyUpdated(pkgName: string, daysThreshold: number = 90): Promise<boolean> {
+export async function isRecentlyUpdated(pkgName: string, daysThreshold = 90): Promise<boolean> {
   const history = await fetchPackageHistory(pkgName);
   const lastModified = new Date(history.modified);
   const now = new Date();
@@ -149,23 +172,14 @@ export async function isRecentlyUpdated(pkgName: string, daysThreshold: number =
   return diffDays <= daysThreshold;
 }
 
-/**
- * Get package maintainer information
- */
 export function getMaintainers(metadata: PackageMetadata): MaintainerInfo[] {
   return [...metadata.maintainers];
 }
 
-/**
- * Get contributor information
- */
 export function getContributors(metadata: PackageMetadata): MaintainerInfo[] {
   return metadata.contributors || [];
 }
 
-/**
- * Check if package has funding sources
- */
 export function hasFunding(metadata: PackageMetadata): boolean {
   if (!metadata.funding) return false;
   if (Array.isArray(metadata.funding)) {
@@ -174,9 +188,6 @@ export function hasFunding(metadata: PackageMetadata): boolean {
   return !!metadata.funding.url;
 }
 
-/**
- * Get total dependency count
- */
 export function getTotalDependencyCount(metadata: PackageMetadata): number {
   let count = 0;
   count += Object.keys(metadata.dependencies || {}).length;
@@ -186,12 +197,7 @@ export function getTotalDependencyCount(metadata: PackageMetadata): number {
   return count;
 }
 
-/**
- * Check if package uses unsafe scripts
- */
 export function hasUnsafeScripts(metadata: PackageMetadata): boolean {
   const dangerousScripts = ['install', 'postinstall', 'preinstall', 'prepare', 'prepublish'];
-  return Object.keys(metadata.scripts || {}).some(script => 
-    dangerousScripts.includes(script)
-  );
+  return Object.keys(metadata.scripts || {}).some((script) => dangerousScripts.includes(script));
 }

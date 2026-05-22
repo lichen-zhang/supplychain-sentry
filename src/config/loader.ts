@@ -29,20 +29,24 @@ export interface SentryConfig {
 }
 
 export async function loadConfig(projectPath: string): Promise<SentryConfig> {
-  const configPath = join(projectPath, '.sentryrc.json');
-  
-  if (!existsSync(configPath)) {
-    return {};
+  const candidates = ['.sentryrc.json', 'sentry.config.json'];
+
+  for (const fileName of candidates) {
+    const configPath = join(projectPath, fileName);
+    if (!existsSync(configPath)) continue;
+
+    try {
+      const content = readFileSync(configPath, 'utf-8');
+      return JSON.parse(content) as SentryConfig;
+    } catch (error) {
+      console.warn(
+        `Warning: Failed to parse ${fileName}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const config = JSON.parse(content) as SentryConfig;
-    return config;
-  } catch (error) {
-    console.warn('Warning: Failed to parse .sentryrc.json:', error instanceof Error ? error.message : String(error));
-    return {};
-  }
+  return {};
 }
 
 export function validateConfig(config: SentryConfig): string[] {

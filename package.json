@@ -1,6 +1,6 @@
 {
   "name": "supplychain-sentry",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Scan npm dependencies for supply chain security risks - detect malicious packages before they compromise your project",
   "main": "dist/cli.js",
   "module": "dist/cli.mjs",
@@ -13,7 +13,9 @@
     "dist",
     "README.md",
     "LICENSE",
-    ".sentryrc.example"
+    ".sentryrc.example",
+    "CHANGELOG.md",
+    "BENCHMARKS.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -21,6 +23,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "validate:real": "npm run build && node scripts/validate-real-projects.mjs",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "prepublishOnly": "npm run build",
@@ -46,8 +50,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "commander": "^12.0.0",
-    "cli-table3": "^0.6.4"
+    "commander": "^12.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

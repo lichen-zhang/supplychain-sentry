@@ -1,0 +1,9 @@
+lockfileVersion: '9.0'
+
+packages:
+
+  '@scope/demo@1.0.0':
+    resolution: {integrity: sha512-demo, tarball: https://registry.npmjs.org/@scope/demo/-/demo-1.0.0.tgz}
+
+  lodash@4.17.21:
+    resolution: {integrity: sha512-lodash, tarball: https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz}

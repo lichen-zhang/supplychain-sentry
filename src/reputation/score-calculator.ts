@@ -25,9 +25,15 @@ export interface ScoreFactor {
 /**
  * Calculate reputation score for a package
  */
+export interface ReputationContext {
+  dependencyDepth?: number;
+  directDependencyCount?: number;
+}
+
 export function calculateReputationScore(
   metadata: PackageMetadata,
-  downloadStats?: DownloadStats
+  downloadStats?: DownloadStats,
+  context?: ReputationContext
 ): ReputationScore & ScoreBreakdown {
   const factors: ScoreFactor[] = [];
   const warnings: string[] = [];
@@ -72,7 +78,7 @@ export function calculateReputationScore(
   }
 
   // 4. Complexity Score (weight: 15%)
-  const complexityScore = calculateComplexityScore(metadata);
+  const complexityScore = calculateComplexityScore(metadata, context);
   factors.push({
     name: 'Dependencies',
     score: complexityScore.score,
@@ -249,7 +255,10 @@ function calculatePopularityScore(downloadStats?: DownloadStats): {
 /**
  * Calculate complexity score based on dependency count
  */
-function calculateComplexityScore(metadata: PackageMetadata): {
+function calculateComplexityScore(
+  metadata: PackageMetadata,
+  context?: ReputationContext
+): {
   score: number;
   max: number;
   description: string;
@@ -263,6 +272,7 @@ function calculateComplexityScore(metadata: PackageMetadata): {
   const optionalDepsCount = Object.keys(metadata.optionalDependencies || {}).length;
   
   const totalDeps = depsCount + devDepsCount + peerDepsCount + optionalDepsCount;
+  const depth = context?.dependencyDepth ?? 0;
 
   let score = 0;
   let description = '';
@@ -288,6 +298,15 @@ function calculateComplexityScore(metadata: PackageMetadata): {
     score = 10;
     description = `${totalDeps} dependencies`;
     warnings.push('Very high dependency count - significant supply chain risk');
+  }
+
+  if (depth >= 4) {
+    score = Math.max(0, score - 15);
+    description += `, depth ${depth}`;
+    warnings.push('Deep dependency nesting increases transitive risk');
+  } else if (depth >= 2) {
+    score = Math.max(0, score - 5);
+    description += `, depth ${depth}`;
   }
 
   return { score, max: 100, description, warnings };

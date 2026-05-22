@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 
 export type LockFileType = 'package-lock.json' | 'pnpm-lock.yaml' | 'yarn.lock';
 
@@ -10,18 +10,19 @@ export interface DependencyInfo {
   integrity?: string;
   dev?: boolean;
   optional?: boolean;
+  depth?: number;
 }
 
 export function findLockFile(projectPath: string): string | null {
   const lockFiles: LockFileType[] = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock'];
-  
+
   for (const lockFile of lockFiles) {
     const lockPath = join(projectPath, lockFile);
     if (existsSync(lockPath)) {
       return lockPath;
     }
   }
-  
+
   return null;
 }
 
@@ -31,188 +32,285 @@ export function parseDependencies(projectPath: string): DependencyInfo[] {
     throw new Error('No lock file found. Please run npm install, pnpm install, or yarn install first.');
   }
 
+  let deps: DependencyInfo[];
   if (lockPath.endsWith('package-lock.json')) {
-    return parsePackageLock(lockPath);
+    deps = parsePackageLock(lockPath);
   } else if (lockPath.endsWith('pnpm-lock.yaml')) {
-    return parsePnpmLock(lockPath);
+    deps = parsePnpmLock(lockPath);
   } else if (lockPath.endsWith('yarn.lock')) {
-    return parseYarnLock(lockPath);
+    deps = parseYarnLock(lockPath);
+  } else {
+    throw new Error(`Unsupported lock file format: ${lockPath}`);
   }
 
-  throw new Error(`Unsupported lock file format: ${lockPath}`);
+  return deduplicateDependencies(deps);
+}
+
+function deduplicateDependencies(deps: DependencyInfo[]): DependencyInfo[] {
+  const byName = new Map<string, DependencyInfo>();
+  for (const dep of deps) {
+    const existing = byName.get(dep.name);
+    if (!existing || compareVersions(dep.version, existing.version) > 0) {
+      byName.set(dep.name, dep);
+    }
+  }
+  return Array.from(byName.values());
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.replace(/^[^\d]*/, '').split('.').map(Number);
+  const pb = b.replace(/^[^\d]*/, '').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function normalizePackageName(lockPath: string): string {
+  const parts = lockPath.split('node_modules/');
+  return parts[parts.length - 1].replace(/\\/g, '/');
+}
+
+function depthFromLockPath(lockPath: string): number {
+  const segments = lockPath.split('node_modules/').length - 1;
+  return Math.max(0, segments);
 }
 
 function parsePackageLock(lockPath: string): DependencyInfo[] {
   const content = JSON.parse(readFileSync(lockPath, 'utf-8'));
   const deps: DependencyInfo[] = [];
 
-  if (!content.packages) {
+  if (content.packages) {
+    for (const [name, info] of Object.entries(content.packages)) {
+      if (name === '' || !name.includes('node_modules')) continue;
+
+      const pkgName = normalizePackageName(name);
+      const version = (info as { version?: string }).version;
+      if (!version) continue;
+
+      deps.push({
+        name: pkgName,
+        version,
+        resolved: (info as { resolved?: string }).resolved,
+        integrity: (info as { integrity?: string }).integrity,
+        dev: (info as { dev?: boolean }).dev || false,
+        optional: (info as { optional?: boolean }).optional || false,
+        depth: depthFromLockPath(name),
+      });
+    }
     return deps;
   }
 
-  for (const [name, info] of Object.entries(content.packages)) {
-    // Skip root package and node_modules entries
-    if (name === '' || !name.startsWith('node_modules/')) {
-      continue;
-    }
-
-    const pkgName = name.replace(/^node_modules\//, '');
-    const version = (info as any).version;
-    
-    if (!version) {
-      continue;
-    }
-
-    const dep: DependencyInfo = {
-      name: pkgName,
-      version,
-      resolved: (info as any).resolved,
-      integrity: (info as any).integrity,
-      dev: (info as any).dev || false,
-      optional: (info as any).optional || false,
-    };
-
-    deps.push(dep);
+  if (content.dependencies) {
+    walkPackageLockV1(content.dependencies, deps, 0);
   }
 
   return deps;
 }
 
+function walkPackageLockV1(
+  tree: Record<string, unknown>,
+  deps: DependencyInfo[],
+  depth: number
+): void {
+  for (const [name, info] of Object.entries(tree)) {
+    const node = info as {
+      version?: string;
+      resolved?: string;
+      integrity?: string;
+      dev?: boolean;
+      optional?: boolean;
+      dependencies?: Record<string, unknown>;
+    };
+    if (node.version) {
+      deps.push({
+        name,
+        version: node.version,
+        resolved: node.resolved,
+        integrity: node.integrity,
+        dev: node.dev || false,
+        optional: node.optional || false,
+        depth,
+      });
+    }
+    if (node.dependencies) {
+      walkPackageLockV1(node.dependencies, deps, depth + 1);
+    }
+  }
+}
+
 function parsePnpmLock(lockPath: string): DependencyInfo[] {
   const content = readFileSync(lockPath, 'utf-8');
   const deps: DependencyInfo[] = [];
-  
-  // Simple YAML parser for pnpm-lock.yaml
-  const lines = content.split('\n');
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
   let currentPkg: Partial<DependencyInfo> | null = null;
-  
+  let inPackages = false;
+
   for (const line of lines) {
-    // Match package entry like " /package-name@1.0.0:"
-    const pkgMatch = line.match(/^ +\/([^@]+)@([^:]+):$/);
-    if (pkgMatch) {
-      if (currentPkg && currentPkg.name && currentPkg.version) {
+    if (line.trim() === 'packages:') {
+      inPackages = true;
+      continue;
+    }
+
+    if (!inPackages) continue;
+
+    const legacyMatch = line.match(/^ {2}\/((?:@[^/]+\/)?[^@]+)@([^:]+):$/);
+    const quotedMatch = line.match(/^ {2}['"]([^'"]+)['"]:\s*$/);
+    const plainMatch = !legacyMatch && !quotedMatch
+      ? line.match(/^ {2}((?:@[^/]+\/)?[^@\s]+)@([^:\s]+):\s*$/)
+      : null;
+
+    if (legacyMatch || quotedMatch || plainMatch) {
+      if (currentPkg?.name && currentPkg.version) {
         deps.push(currentPkg as DependencyInfo);
       }
-      currentPkg = {
-        name: pkgMatch[1],
-        version: pkgMatch[2],
-      };
+
+      if (legacyMatch) {
+        currentPkg = {
+          name: legacyMatch[1],
+          version: legacyMatch[2],
+          depth: 0,
+        };
+      } else if (plainMatch) {
+        currentPkg = {
+          name: plainMatch[1],
+          version: plainMatch[2],
+          depth: 0,
+        };
+      } else {
+        const descriptor = quotedMatch![1];
+        const atIndex = descriptor.lastIndexOf('@');
+        currentPkg = {
+          name: atIndex > 0 ? descriptor.slice(0, atIndex) : descriptor,
+          version: atIndex > 0 ? descriptor.slice(atIndex + 1) : 'unknown',
+          depth: 0,
+        };
+      }
       continue;
     }
-    
-    // Match resolution field
-    const resMatch = line.match(/^    resolution:\s+"([^"]+)"/);
-    if (resMatch && currentPkg) {
-      currentPkg.resolved = resMatch[1];
+
+    const integrityMatch = line.match(/integrity:\s+(sha512-[A-Za-z0-9+/=]+)/);
+    if (integrityMatch && currentPkg) {
+      currentPkg.integrity = integrityMatch[1].trim();
       continue;
     }
-    
-    // Match checksum field
-    const chkMatch = line.match(/^    checksum:\s+"([^"]+)"/);
-    if (chkMatch && currentPkg) {
-      currentPkg.integrity = `sha512-${chkMatch[1]}`;
+
+    const tarballMatch = line.match(/tarball:\s+(https?:\/\/[^\s},]+)/);
+    if (tarballMatch && currentPkg) {
+      currentPkg.resolved = tarballMatch[1].trim();
       continue;
+    }
+
+    const simpleResMatch = line.match(/^ {4}resolution:\s+"([^"]+)"/);
+    if (simpleResMatch && currentPkg) {
+      currentPkg.resolved = simpleResMatch[1];
     }
   }
-  
-  // Don't forget the last package
-  if (currentPkg && currentPkg.name && currentPkg.version) {
+
+  if (currentPkg?.name && currentPkg.version) {
     deps.push(currentPkg as DependencyInfo);
   }
-  
+
   return deps;
 }
 
 function parseYarnLock(lockPath: string): DependencyInfo[] {
   const content = readFileSync(lockPath, 'utf-8');
   const deps: DependencyInfo[] = [];
-  
-  // Simple Yarn lock parser
-  const lines = content.split('\n');
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
   let currentPkg: Partial<DependencyInfo> | null = null;
   let inPackageBlock = false;
-  
+
   for (const line of lines) {
-    // Match package entry like "package@1.0.0:"
-    const pkgMatch = line.match(/^("[^"]+"|[^:]+)@([^:]+):$/);
-    if (pkgMatch) {
-      if (currentPkg && currentPkg.name && currentPkg.version) {
+    if (/^\s/.test(line)) {
+      if (inPackageBlock && currentPkg) {
+        const versionMatch = line.match(/^\s+version[:\s]+"([^"]+)"/);
+        if (versionMatch) currentPkg.version = versionMatch[1];
+
+        const resMatch = line.match(/^\s+resolved[:\s]+"([^"]+)"/);
+        if (resMatch) currentPkg.resolved = resMatch[1];
+
+        const intMatch = line.match(/^\s+integrity[:\s]+"([^"]+)"/);
+        if (intMatch) currentPkg.integrity = intMatch[1];
+      }
+      continue;
+    }
+
+    const quotedHeader = line.match(/^"(.+@.+)":$/);
+    const unquotedHeader = line.match(/^(?!")((?:@[^/]+\/)?[^@\s]+)@([^:\s]+):$/);
+
+    if (quotedHeader || unquotedHeader) {
+      if (currentPkg?.name && currentPkg.version) {
         deps.push(currentPkg as DependencyInfo);
       }
-      
-      const name = pkgMatch[1].replace(/"/g, '');
-      currentPkg = {
-        name,
-        version: pkgMatch[2],
-      };
+
+      if (unquotedHeader) {
+        currentPkg = {
+          name: unquotedHeader[1],
+          version: unquotedHeader[2],
+          depth: 0,
+        };
+      } else {
+        const descriptor = quotedHeader![1];
+        const atIndex = descriptor.lastIndexOf('@');
+        currentPkg = {
+          name: descriptor.slice(0, atIndex),
+          version: descriptor.slice(atIndex + 1),
+          depth: 0,
+        };
+      }
+
       inPackageBlock = true;
       continue;
     }
-    
-    // Empty line ends package block
+
     if (line.trim() === '') {
-      if (currentPkg && currentPkg.name && currentPkg.version) {
+      if (currentPkg?.name && currentPkg.version) {
         deps.push(currentPkg as DependencyInfo);
       }
       currentPkg = null;
       inPackageBlock = false;
-      continue;
-    }
-    
-    if (inPackageBlock && currentPkg) {
-      // Match resolved field
-      const resMatch = line.match(/^\s+resolved:\s+"([^"]+)"/);
-      if (resMatch) {
-        currentPkg.resolved = resMatch[1];
-        continue;
-      }
-      
-      // Match integrity/checksum field
-      const intMatch = line.match(/^\s+integrity:\s+"([^"]+)"/);
-      if (intMatch) {
-        currentPkg.integrity = intMatch[1];
-        continue;
-      }
     }
   }
-  
-  // Don't forget the last package
-  if (currentPkg && currentPkg.name && currentPkg.version) {
+
+  if (currentPkg?.name && currentPkg.version) {
     deps.push(currentPkg as DependencyInfo);
   }
-  
+
   return deps;
 }
 
-export function getPackagePath(projectPath: string, packageName: string): string {
-  return join(projectPath, 'node_modules', packageName);
+export function getPackagePath(projectPath: string, packageName: string, version?: string): string {
+  const direct = join(projectPath, 'node_modules', ...packageName.split('/'));
+  if (existsSync(join(direct, 'package.json'))) {
+    return direct;
+  }
+
+  if (version) {
+    const pnpmFolder = packageName.startsWith('@')
+      ? `${packageName.replace('/', '+')}@${version}`
+      : `${packageName}@${version}`;
+    const pnpmPath = join(
+      projectPath,
+      'node_modules',
+      '.pnpm',
+      pnpmFolder,
+      'node_modules',
+      ...packageName.split('/')
+    );
+    if (existsSync(join(pnpmPath, 'package.json'))) {
+      return pnpmPath;
+    }
+  }
+
+  return direct;
 }
 
-export async function downloadPackage(packageName: string, version: string, destDir: string): Promise<string> {
-  const { exec } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const { mkdtemp, writeFile } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  
-  const execAsync = promisify(exec);
-  
-  // Create temp directory
-  const tempDir = await mkdtemp(join(tmpdir(), 'scs-'));
-  
-  try {
-    // Use npm pack to download the package
-    await execAsync(`npm pack ${packageName}@${version} --pack-destination ${tempDir}`, {
-      timeout: 60000,
-    });
-    
-    // Extract the tarball
-    const { execSync } = await import('node:child_process');
-    const tarball = execSync(`ls ${tempDir}/*.tgz`, { encoding: 'utf-8' }).trim();
-    
-    // Return path to extracted package
-    return tempDir;
-  } catch (error) {
-    throw new Error(`Failed to download package ${packageName}@${version}: ${error instanceof Error ? error.message : String(error)}`);
-  }
+export function getMaxDependencyDepth(deps: DependencyInfo[]): number {
+  return deps.reduce((max, dep) => Math.max(max, dep.depth ?? 0), 0);
+}
+
+export function getDirectDependencyCount(deps: DependencyInfo[]): number {
+  return deps.filter((dep) => (dep.depth ?? 0) === 0).length;
 }

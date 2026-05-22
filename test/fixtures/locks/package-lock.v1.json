@@ -1,0 +1,22 @@
+{
+  "name": "legacy-project",
+  "version": "1.0.0",
+  "lockfileVersion": 1,
+  "dependencies": {
+    "safe-package": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/safe-package/-/safe-package-1.0.0.tgz",
+      "integrity": "sha512-abc",
+      "requires": {
+        "nested-dep": "1.0.0"
+      },
+      "dependencies": {
+        "nested-dep": {
+          "version": "1.0.0",
+          "resolved": "https://registry.npmjs.org/nested-dep/-/nested-dep-1.0.0.tgz",
+          "integrity": "sha512-def"
+        }
+      }
+    }
+  }
+}

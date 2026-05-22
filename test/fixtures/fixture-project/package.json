@@ -1,0 +1,9 @@
+{
+  "name": "fixture-project",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "safe-package": "file:../safe-package",
+    "malicious-eval": "file:../malicious-eval"
+  }
+}

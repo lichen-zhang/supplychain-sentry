@@ -1,0 +1,16 @@
+lockfileVersion: '6.0'
+
+settings:
+  autoInstallPeers: true
+
+importers:
+  .:
+    dependencies:
+      safe-package:
+        specifier: 1.0.0
+        version: 1.0.0
+
+packages:
+  /safe-package@1.0.0:
+    resolution: {integrity: sha512-abc123}
+    engines: {node: '>=18'}
