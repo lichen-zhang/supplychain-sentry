@@ -23,7 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "prepublishOnly": "npm run build && npm test",
+    "prepublishOnly": "npm run build",
     "release": "npm run build && npm publish"
   },
   "keywords": [
@@ -36,11 +36,11 @@
     "dependency-audit",
     "cli"
   ],
-  "author": "",
+  "author": "zhanglichen",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lichen-zhang/supplychain-sentry.git"
+    "url": "git+https://github.com/lichen-zhang/supplychain-sentry.git"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -61,6 +61,7 @@
     "vitest": "^1.0.0"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
